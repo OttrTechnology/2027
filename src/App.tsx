@@ -41,6 +41,7 @@ export function App() {
       <FluidGlass
         className="absolute inset-0 h-svh w-full"
         mode={settings.mode}
+        interaction={settings.interaction}
         imageUrl={logoSrc}
         backgroundColor={backgroundColor}
         lensProps={modeProps}

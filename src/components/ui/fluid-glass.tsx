@@ -14,6 +14,7 @@ import {
   useFrame,
   useThree,
   type ThreeElements,
+  type ThreeEvent,
 } from "@react-three/fiber"
 import {
   useFBO,
@@ -23,6 +24,8 @@ import {
   MeshTransmissionMaterial,
 } from "@react-three/drei"
 import { easing } from "maath"
+
+import type { FluidGlassInteraction } from "@/lib/fluid-glass-settings"
 
 type Mode = "lens" | "cube"
 
@@ -35,6 +38,7 @@ interface FluidGlassProps {
   backgroundColor?: string
   imageUrl?: string
   className?: string
+  interaction?: FluidGlassInteraction
 }
 
 export default function FluidGlass({
@@ -44,6 +48,7 @@ export default function FluidGlass({
   backgroundColor = "#120F17",
   imageUrl = "/logo-dark-mode.png",
   className,
+  interaction = "follow",
 }: FluidGlassProps) {
   const Wrapper = mode === "cube" ? Cube : Lens
   const modeProps = mode === "cube" ? cubeProps : lensProps
@@ -77,7 +82,11 @@ export default function FluidGlass({
         }}
       >
         <Suspense fallback={null}>
-          <Wrapper modeProps={modeProps} backgroundColor={backgroundColor}>
+          <Wrapper
+            modeProps={modeProps}
+            backgroundColor={backgroundColor}
+            interaction={interaction}
+          >
             <CenteredLogo url={imageUrl} />
           </Wrapper>
           <Preload all />
@@ -96,10 +105,9 @@ interface ModeWrapperProps extends MeshProps {
   children?: ReactNode
   glb: string
   geometryKey: string
-  lockToBottom?: boolean
-  followPointer?: boolean
   modeProps?: ModeProps
   backgroundColor?: string
+  interaction?: FluidGlassInteraction
 }
 
 type ModeComponentProps = Omit<ModeWrapperProps, "glb" | "geometryKey">
@@ -108,10 +116,9 @@ const ModeWrapper = memo(function ModeWrapper({
   children,
   glb,
   geometryKey,
-  lockToBottom = false,
-  followPointer = true,
   modeProps = {},
   backgroundColor = "#120F17",
+  interaction = "follow",
   ...props
 }: ModeWrapperProps) {
   const ref = useRef<THREE.Mesh>(null!)
@@ -120,6 +127,10 @@ const ModeWrapper = memo(function ModeWrapper({
   const { viewport: vp } = useThree()
   const [scene] = useState<THREE.Scene>(() => new THREE.Scene())
   const geoWidthRef = useRef<number>(1)
+  const placedRef = useRef(new THREE.Vector3(0, 0, 15))
+  const draggingRef = useRef(false)
+  const settlingRef = useRef(false)
+  const interactionRef = useRef(interaction)
 
   useEffect(() => {
     const mesh = nodes[geometryKey] as THREE.Mesh | undefined
@@ -129,18 +140,83 @@ const ModeWrapper = memo(function ModeWrapper({
     geoWidthRef.current = geo.boundingBox!.max.x - geo.boundingBox!.min.x || 1
   }, [nodes, geometryKey])
 
+  useEffect(() => {
+    interactionRef.current = interaction
+    if (interaction === "drag") {
+      placedRef.current.set(0, 0, 15)
+      if (ref.current) {
+        ref.current.position.set(0, 0, 15)
+      }
+      draggingRef.current = false
+      settlingRef.current = false
+      document.body.style.cursor = "grab"
+    }
+    if (interaction === "follow") {
+      draggingRef.current = false
+      settlingRef.current = false
+      document.body.style.cursor = "auto"
+    }
+  }, [interaction])
+
+  useEffect(() => {
+    const endDrag = () => {
+      if (!draggingRef.current) return
+      draggingRef.current = false
+      // Keep placedRef at the last pointer target so the mesh eases into place
+      settlingRef.current = true
+      if (interactionRef.current === "drag") {
+        document.body.style.cursor = "grab"
+      } else {
+        document.body.style.cursor = "auto"
+      }
+    }
+
+    window.addEventListener("pointerup", endDrag)
+    window.addEventListener("pointercancel", endDrag)
+    return () => {
+      window.removeEventListener("pointerup", endDrag)
+      window.removeEventListener("pointercancel", endDrag)
+      document.body.style.cursor = "auto"
+    }
+  }, [])
+
   useFrame((state, delta) => {
     const { gl, viewport, pointer, camera } = state
     const v = viewport.getCurrentViewport(camera, [0, 0, 15])
 
     if (ref.current) {
-      const destX = followPointer ? (pointer.x * v.width) / 2 : 0
-      const destY = lockToBottom
-        ? -v.height / 2 + 0.2
-        : followPointer
-          ? (pointer.y * v.height) / 2
-          : 0
-      easing.damp3(ref.current.position, [destX, destY, 15], 0.15, delta)
+      const pointerX = (pointer.x * v.width) / 2
+      const pointerY = (pointer.y * v.height) / 2
+
+      let destX: number
+      let destY: number
+      let smoothTime = 0.15
+
+      if (interaction === "follow") {
+        destX = pointerX
+        destY = pointerY
+        smoothTime = 0.15
+      } else if (draggingRef.current) {
+        destX = pointerX
+        destY = pointerY
+        placedRef.current.set(destX, destY, 15)
+        settlingRef.current = false
+        smoothTime = 0.12
+      } else {
+        destX = placedRef.current.x
+        destY = placedRef.current.y
+        smoothTime = settlingRef.current ? 0.32 : 0.15
+      }
+
+      easing.damp3(ref.current.position, [destX, destY, 15], smoothTime, delta)
+
+      if (settlingRef.current) {
+        const dx = ref.current.position.x - destX
+        const dy = ref.current.position.y - destY
+        if (dx * dx + dy * dy < 1e-6) {
+          settlingRef.current = false
+        }
+      }
 
       if ((modeProps as { scale?: number }).scale == null) {
         const maxWorld = v.width * 0.9
@@ -174,6 +250,25 @@ const ModeWrapper = memo(function ModeWrapper({
 
   const geometry = (nodes[geometryKey] as THREE.Mesh | undefined)?.geometry
 
+  const onPointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (interaction !== "drag") return
+    event.stopPropagation()
+    draggingRef.current = true
+    document.body.style.cursor = "grabbing"
+  }
+
+  const onPointerOver = () => {
+    if (interaction === "drag" && !draggingRef.current) {
+      document.body.style.cursor = "grab"
+    }
+  }
+
+  const onPointerOut = () => {
+    if (interaction === "drag" && !draggingRef.current) {
+      document.body.style.cursor = "auto"
+    }
+  }
+
   return (
     <>
       {createPortal(
@@ -197,6 +292,9 @@ const ModeWrapper = memo(function ModeWrapper({
           scale={scale ?? 0.15}
           rotation-x={Math.PI / 2}
           geometry={geometry}
+          onPointerDown={onPointerDown}
+          onPointerOver={onPointerOver}
+          onPointerOut={onPointerOut}
           {...props}
         >
           <MeshTransmissionMaterial
@@ -217,25 +315,25 @@ const ModeWrapper = memo(function ModeWrapper({
   )
 })
 
-function Lens({ modeProps, ...p }: ModeComponentProps) {
+function Lens({ modeProps, interaction, ...p }: ModeComponentProps) {
   return (
     <ModeWrapper
       glb="/assets/3d/lens.glb"
       geometryKey="Cylinder"
-      followPointer
       modeProps={modeProps}
+      interaction={interaction}
       {...p}
     />
   )
 }
 
-function Cube({ modeProps, ...p }: ModeComponentProps) {
+function Cube({ modeProps, interaction, ...p }: ModeComponentProps) {
   return (
     <ModeWrapper
       glb="/assets/3d/cube.glb"
       geometryKey="Cube"
-      followPointer
       modeProps={modeProps}
+      interaction={interaction}
       {...p}
     />
   )

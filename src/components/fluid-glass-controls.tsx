@@ -11,6 +11,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import {
+  type FluidGlassInteraction,
   type FluidGlassMode,
   type FluidGlassSettings,
 } from "@/lib/fluid-glass-settings"
@@ -23,6 +24,10 @@ type FluidGlassControlsProps = {
 }
 
 const MODES: FluidGlassMode[] = ["lens", "cube"]
+const INTERACTIONS: { value: FluidGlassInteraction; label: string }[] = [
+  { value: "follow", label: "Follow" },
+  { value: "drag", label: "Drag" },
+]
 
 function NumberSlider({
   id,
@@ -110,6 +115,30 @@ export function FluidGlassControls({
                 onClick={() => patch({ mode })}
               >
                 {mode}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-xs font-normal text-muted-foreground">
+            Interaction
+          </Label>
+          <div className="flex gap-1 rounded-lg bg-muted/60 p-1">
+            {INTERACTIONS.map(({ value: interaction, label }) => (
+              <Button
+                key={interaction}
+                type="button"
+                variant="ghost"
+                size="xs"
+                className={cn(
+                  "flex-1",
+                  value.interaction === interaction &&
+                    "bg-background text-foreground shadow-sm hover:bg-background"
+                )}
+                onClick={() => patch({ interaction })}
+              >
+                {label}
               </Button>
             ))}
           </div>
